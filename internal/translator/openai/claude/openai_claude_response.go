@@ -36,6 +36,8 @@ type ConvertOpenAIResponseToAnthropicParams struct {
 	ContentAccumulator strings.Builder
 	// Tool calls accumulator for streaming
 	ToolCallsAccumulator map[int]*ToolCallAccumulator
+	// Preserve opaque upstream entries in arrival order for assistant replay.
+	ReasoningDetails [][]byte
 	// Track if text content block has been started
 	TextContentBlockStarted bool
 	// Track if thinking content block has been started
@@ -52,9 +54,9 @@ type ConvertOpenAIResponseToAnthropicParams struct {
 	MessageStopSent bool
 	// Tool call content block index mapping
 	ToolCallBlockIndexes map[int]int
-	// OmittedToolCallIndexes maps a chunk-local tool_calls array position to the
-	// active accumulator key when the upstream omits tool_calls[].index.
-	OmittedToolCallIndexes map[int]int
+	// ToolCallIndexes maps upstream indexes (or array positions if omitted) to
+	// active accumulators, which can differ when an upstream reuses an index.
+	ToolCallIndexes map[int]int
 	// Index assigned to text content block
 	TextContentBlockIndex int
 	// Index assigned to thinking content block
@@ -247,6 +249,12 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 			// Don't send content_block_start for text here - wait for actual content
 		}
 
+		if details := delta.Get("reasoning_details"); details.IsArray() {
+			for _, detail := range details.Array() {
+				param.ReasoningDetails = append(param.ReasoningDetails, []byte(detail.Raw))
+			}
+		}
+
 		// Handle reasoning content delta
 		for _, reasoningText := range collectOpenAIObjectReasoningTexts(delta) {
 			emitStreamingThinkingDelta(param, reasoningText, &results)
@@ -287,29 +295,27 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 					incomingID = id.String()
 				}
 
-				index := int(toolCall.Get("index").Int())
+				sourceIndex := int(toolCall.Get("index").Int())
 				if !toolCall.Get("index").Exists() {
-					pos := int(arrayIndex.Int())
-					index = pos
-					if param.OmittedToolCallIndexes != nil {
-						if mapped, ok := param.OmittedToolCallIndexes[pos]; ok {
-							index = mapped
+					sourceIndex = int(arrayIndex.Int())
+				}
+				if param.ToolCallIndexes == nil {
+					param.ToolCallIndexes = make(map[int]int)
+				}
+				index, mapped := param.ToolCallIndexes[sourceIndex]
+				if !mapped {
+					index = sourceIndex
+				}
+				if existing := param.ToolCallsAccumulator[index]; existing != nil &&
+					(!mapped || (incomingID != "" && existing.ID != "" && existing.ID != incomingID)) {
+					// Reused upstream indexes must not join arguments from distinct calls.
+					for k := range param.ToolCallsAccumulator {
+						if k >= index {
+							index = k + 1
 						}
-					}
-					if existing, exists := param.ToolCallsAccumulator[index]; exists && existing != nil && incomingID != "" && existing.ID != "" && existing.ID != incomingID {
-						nextIndex := index + 1
-						for k := range param.ToolCallsAccumulator {
-							if k >= nextIndex {
-								nextIndex = k + 1
-							}
-						}
-						index = nextIndex
-						if param.OmittedToolCallIndexes == nil {
-							param.OmittedToolCallIndexes = make(map[int]int)
-						}
-						param.OmittedToolCallIndexes[pos] = index
 					}
 				}
+				param.ToolCallIndexes[sourceIndex] = index
 
 				// Initialize accumulator if needed
 				if _, exists := param.ToolCallsAccumulator[index]; !exists {
@@ -438,6 +444,9 @@ func convertOpenAINonStreamingToAnthropic(rawJSON []byte) [][]byte {
 	if choices := root.Get("choices"); choices.Exists() && choices.IsArray() && len(choices.Array()) > 0 {
 		choice := choices.Array()[0] // Take first choice
 		var contentBlocks [][]byte
+		if block := reasoningDetailsBlock(choice.Get("message.reasoning_details")); block != nil {
+			contentBlocks = append(contentBlocks, block)
+		}
 
 		for _, reasoningText := range collectOpenAIObjectReasoningTexts(choice.Get("message")) {
 			if strings.TrimSpace(reasoningText) == "" {
@@ -913,6 +922,16 @@ func finalizeOpenAIAnthropicContentBlocks(param *ConvertOpenAIResponseToAnthropi
 		param.ContentBlocksStopped = true
 
 		emitBufferedInterleavedContent(param, results)
+		if len(param.ReasoningDetails) > 0 {
+			block := reasoningDetailsBlock(ojson.ParseBytes(translatorcommon.JoinRawArray(param.ReasoningDetails)))
+			emitStreamingThinkingDelta(param, ".", results)
+			delta := ojson.NewDocString(`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":""}}`)
+			_ = delta.Set("index", param.ThinkingContentBlockIndex)
+			_ = delta.Set("delta.signature", ojson.GetBytes(block, "signature").String())
+			*results = append(*results, translatorcommon.AppendSSEEventBytes(nil, "content_block_delta", delta.Bytes(), 2))
+			stopThinkingContentBlock(param, results)
+			param.ReasoningDetails = nil
+		}
 	}
 }
 
@@ -971,6 +990,9 @@ func ConvertOpenAIResponseToClaudeNonStream(_ context.Context, _ string, origina
 		finishReason = choice.Get("finish_reason").String()
 
 		if message := choice.Get("message"); message.Exists() {
+			if block := reasoningDetailsBlock(message.Get("reasoning_details")); block != nil {
+				blocks = append(blocks, block)
+			}
 			for _, reasoningText := range collectOpenAIObjectReasoningTexts(message) {
 				if strings.TrimSpace(reasoningText) == "" {
 					continue

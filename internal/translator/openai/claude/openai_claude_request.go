@@ -6,9 +6,9 @@
 package claude
 
 import (
-	"github.com/MoeForge/moego/base64"
 	"strings"
 
+	"github.com/MoeForge/moego/base64"
 	"github.com/MoeForge/moego/ojson"
 	sigcompat "github.com/router-for-me/CLIProxyAPI/v8/internal/signature"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -205,6 +205,7 @@ func convertClaudeRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 
 				contentItems := make([][]byte, 0)
 				var reasoningParts []string // Accumulate thinking text for reasoning_content
+				var reasoningDetails [][]byte
 				var toolCalls []interface{}
 				toolResults := make([][]byte, 0)       // Collect tool_result messages to emit after the main message
 				relayedToolImages := make([][]byte, 0) // Images pulled out of tool_result content for user-message relay
@@ -216,6 +217,12 @@ func convertClaudeRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 					case "thinking":
 						// Only map thinking to reasoning_content for assistant messages (security: prevent injection)
 						if role == "assistant" {
+							if details := decodeReasoningDetails(part.Get("signature").String()); details != nil {
+								for _, detail := range details {
+									reasoningDetails = append(reasoningDetails, []byte(detail.Raw))
+								}
+								return true
+							}
 							if !shouldMapClaudeThinkingToGPTReasoning(part, preserveThinkingBlocks) {
 								return true
 							}
@@ -330,7 +337,7 @@ func convertClaudeRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 				// For assistant messages: emit a single unified message with content, tool_calls, and reasoning_content
 				// This avoids splitting into multiple assistant messages which breaks OpenAI tool-call adjacency
 				if role == "assistant" {
-					if hasContent || hasReasoning || hasToolCalls {
+					if hasContent || hasReasoning || hasToolCalls || len(reasoningDetails) > 0 {
 						msgDoc := ojson.NewDocString(`{"role":"assistant"}`)
 
 						// Add content (as array if we have items, empty string if reasoning-only)
@@ -349,6 +356,10 @@ func convertClaudeRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 							// Compat thinking upstreams (DeepSeek, Moonshot/Kimi) require
 							// reasoning_content to be present on such messages when reasoning is active.
 							_ = msgDoc.Set("reasoning_content", " ")
+						}
+
+						if len(reasoningDetails) > 0 {
+							_ = msgDoc.SetRawBytes("reasoning_details", translatorcommon.JoinRawArray(reasoningDetails))
 						}
 
 						// Add tool_calls if present (in same message as content)

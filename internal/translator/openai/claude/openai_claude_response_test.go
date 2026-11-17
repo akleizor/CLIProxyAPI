@@ -1252,8 +1252,8 @@ func TestStreaming_ReasoningFieldEmitsThinkingDelta(t *testing.T) {
 			thinkingDeltas = append(thinkingDeltas, ojson.Get(e.Payload, "delta.thinking").String())
 		}
 	}
-	if len(thinkingDeltas) != 1 || thinkingDeltas[0] != "I am thinking" {
-		t.Fatalf("expected 1 thinking delta 'I am thinking', got %v", thinkingDeltas)
+	if len(thinkingDeltas) != 2 || thinkingDeltas[0] != "I am thinking" || thinkingDeltas[1] != "." {
+		t.Fatalf("expected reasoning followed by its signature carrier, got %v", thinkingDeltas)
 	}
 }
 
@@ -1287,8 +1287,8 @@ func TestStreaming_ReasoningDetailsOnlyEmitsThinkingDelta(t *testing.T) {
 			thinkingDeltas = append(thinkingDeltas, ojson.Get(e.Payload, "delta.thinking").String())
 		}
 	}
-	if len(thinkingDeltas) != 1 || thinkingDeltas[0] != "Only details thinking" {
-		t.Fatalf("expected 1 thinking delta 'Only details thinking', got %v", thinkingDeltas)
+	if len(thinkingDeltas) != 2 || thinkingDeltas[0] != "Only details thinking" || thinkingDeltas[1] != "." {
+		t.Fatalf("expected reasoning followed by its signature carrier, got %v", thinkingDeltas)
 	}
 }
 
