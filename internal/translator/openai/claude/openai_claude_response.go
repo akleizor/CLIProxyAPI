@@ -609,9 +609,8 @@ func emitStreamingTextDelta(param *ConvertOpenAIResponseToAnthropicParams, text 
 	if text == "" {
 		return
 	}
-	if param.OpenToolCallIndex != -1 {
-		// Tool call content block is currently active on the wire.
-		// Buffer this text so content blocks remain strictly sequential.
+	if param.OpenToolCallIndex != -1 || len(param.ReasoningDetails) > 0 {
+		// Keep blocks sequential and the final text after its signature carrier.
 		if n := len(param.InterleavedContentChunks); n > 0 && param.InterleavedContentChunks[n-1].Type == "text" {
 			param.InterleavedContentChunks[n-1].Text += text
 		} else {
@@ -921,7 +920,6 @@ func finalizeOpenAIAnthropicContentBlocks(param *ConvertOpenAIResponseToAnthropi
 		}
 		param.ContentBlocksStopped = true
 
-		emitBufferedInterleavedContent(param, results)
 		if len(param.ReasoningDetails) > 0 {
 			block := reasoningDetailsBlock(ojson.ParseBytes(translatorcommon.JoinRawArray(param.ReasoningDetails)))
 			emitStreamingThinkingDelta(param, ".", results)
@@ -932,6 +930,7 @@ func finalizeOpenAIAnthropicContentBlocks(param *ConvertOpenAIResponseToAnthropi
 			stopThinkingContentBlock(param, results)
 			param.ReasoningDetails = nil
 		}
+		emitBufferedInterleavedContent(param, results)
 	}
 }
 

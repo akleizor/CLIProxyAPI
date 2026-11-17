@@ -140,6 +140,20 @@ func TestReasoningDetails_ReplayValidation(t *testing.T) {
 	}
 }
 
+func TestReasoningDetails_FinalAnswerStaysLastIssue646(t *testing.T) {
+	events := runStream(t, streamReq, `{"choices":[{"delta":{"content":"PONG","reasoning_details":[{"type":"content","text":"PONG","signature":"content-signature"}]},"finish_reason":"stop"}]}`)
+	assertSequentialContentBlocks(t, events)
+	var lastBlockType string
+	for _, event := range events {
+		if event.Type == "content_block_start" {
+			lastBlockType = ojson.Get(event.Payload, "content_block.type").String()
+		}
+	}
+	if lastBlockType != "text" {
+		t.Fatalf("last block = %q, want text so Claude Code prints the final answer", lastBlockType)
+	}
+}
+
 func TestStreaming_NoReasoningDetailsAddsNoSignature(t *testing.T) {
 	events := runStream(t, streamReq, `{"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]}`)
 	for _, event := range events {
