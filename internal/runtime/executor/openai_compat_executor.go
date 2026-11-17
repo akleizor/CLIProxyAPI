@@ -22,6 +22,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	openaiclaude "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/openai/claude"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -508,6 +509,14 @@ func (e *OpenAICompatExecutor) executeStreamWithCredentials(ctx context.Context,
 		defer streamUsage.Publish(ctx, reporter)
 
 		publishStreamError := func(streamErr statusErr, containsPayload bool) {
+			if responseFormat == sdktranslator.FormatClaude {
+				for _, chunk := range openaiclaude.FlushOpenAIResponseToClaude(param) {
+					select {
+					case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
+					case <-ctx.Done():
+					}
+				}
+			}
 			loggedErr := streamErr
 			if containsPayload {
 				loggedErr = statusErr{code: streamErr.code, msg: "upstream stream returned an error payload"}
@@ -644,6 +653,15 @@ func (e *OpenAICompatExecutor) executeStreamWithCredentials(ctx context.Context,
 		}
 		if streamFailed || streamAborted {
 			return
+		}
+		if !seenDone && responseFormat == sdktranslator.FormatClaude {
+			for _, chunk := range openaiclaude.FlushOpenAIResponseToClaude(param) {
+				select {
+				case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
+				case <-ctx.Done():
+					return
+				}
+			}
 		}
 		if errScan != nil && !seenDone {
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)

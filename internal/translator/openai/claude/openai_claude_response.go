@@ -616,6 +616,17 @@ func emitStreamingTextDelta(param *ConvertOpenAIResponseToAnthropicParams, text 
 	param.PendingText = strings.Clone(text)
 }
 
+// FlushOpenAIResponseToClaude preserves pending text before a stream error, without completing the message.
+func FlushOpenAIResponseToClaude(param any) [][]byte {
+	state, ok := param.(*ConvertOpenAIResponseToAnthropicParams)
+	if !ok || state == nil {
+		return nil
+	}
+	var results [][]byte
+	flushPendingText(state, &results)
+	return results
+}
+
 func flushPendingText(param *ConvertOpenAIResponseToAnthropicParams, results *[][]byte) {
 	text := param.PendingText
 	param.PendingText = ""
