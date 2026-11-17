@@ -59,6 +59,8 @@ type ClaudeThreadBetaStore struct {
 	mu      sync.Mutex
 	entries map[claudeThreadBetaKey]claudeThreadBetaProfile
 	order   []claudeThreadBetaKey
+	// Limit overrides the entry budget; zero keeps claudeThreadBetaLimit.
+	Limit int
 }
 
 // ClaudeThreadBetaRequest binds a request to the profile sent to its upstream.
@@ -170,7 +172,11 @@ func (s *ClaudeThreadBetaStore) save(key claudeThreadBetaKey, profile claudeThre
 	}
 	s.entries[key] = profile
 	s.order = append(s.order, key)
-	if len(s.order) > claudeThreadBetaLimit {
+	limit := s.Limit
+	if limit <= 0 {
+		limit = claudeThreadBetaLimit
+	}
+	if len(s.order) > limit {
 		delete(s.entries, s.order[0])
 		s.order = s.order[1:]
 	}

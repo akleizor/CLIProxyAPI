@@ -415,6 +415,10 @@ func TestClaudeThreadCallerProfileSurvivesMissingCache(t *testing.T) {
 			})
 			ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", http.RoundTripper(transport))
 			executor := NewClaudeExecutor(&config.Config{})
+			// A tiny store makes the eviction variants evict with a few requests
+			// instead of 1024 full executor round trips.
+			const evictionLimit = 8
+			executor.threadBetas = &helps.ClaudeThreadBetaStore{Limit: evictionLimit}
 			auth := &cliproxyauth.Auth{ID: t.Name(), Attributes: map[string]string{"api_key": "key-thread-cold-cache"}}
 			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude, Headers: http.Header{"Anthropic-Beta": []string{callerBetas}}}
 			request := cliproxyexecutor.Request{Model: "claude-opus-5", Payload: []byte(`{` + initialFields + `"model":"claude-opus-5","thread":{"type":"create"},"thinking":{"type":"disabled"},"messages":[{"role":"user","content":"first"}]}`)}
@@ -432,7 +436,7 @@ func TestClaudeThreadCallerProfileSurvivesMissingCache(t *testing.T) {
 			} else {
 				otherOpts := opts
 				otherOpts.Metadata = map[string]any{cliproxyexecutor.CallerScopeMetadataKey: "other-caller"}
-				for range 1024 {
+				for range evictionLimit {
 					if _, errExecute := executor.Execute(ctx, auth, request, otherOpts); errExecute != nil {
 						t.Fatal(errExecute)
 					}

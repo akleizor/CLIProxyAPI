@@ -21,6 +21,7 @@ func TestIssue7431_LargeWeightedPoolRotatesAcrossTransientExclusionsAndCooldowns
 			name = "session-affinity-legacy"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			const (
 				totalCreds   = 1080
 				model        = "issue-7431-large-wrr-model"
@@ -61,6 +62,9 @@ func TestIssue7431_LargeWeightedPoolRotatesAcrossTransientExclusionsAndCooldowns
 			reg := registry.GetGlobalRegistry()
 			authIDs := make([]string, totalCreds)
 			failSet := make(map[string]bool)
+			// Deferred rebuild: each Register otherwise rebuilds the alias tables for
+			// the whole pool, which is O(n²) over 1080 credentials.
+			registerCtx := WithDeferredAPIKeyModelAliasRebuild(WithSkipPersist(t.Context()))
 			for i := 0; i < totalCreds; i++ {
 				id := fmt.Sprintf("thk-%s-%04d", name, i)
 				authIDs[i] = id
@@ -80,10 +84,11 @@ func TestIssue7431_LargeWeightedPoolRotatesAcrossTransientExclusionsAndCooldowns
 					},
 				}
 				reg.RegisterClient(id, providerKey, []*registry.ModelInfo{{ID: model}})
-				if _, errReg := manager.Register(WithSkipPersist(t.Context()), auth); errReg != nil {
+				if _, errReg := manager.Register(registerCtx, auth); errReg != nil {
 					t.Fatalf("register %s: %v", id, errReg)
 				}
 			}
+			manager.RefreshAPIKeyModelAlias()
 			t.Cleanup(func() {
 				for _, id := range authIDs {
 					reg.UnregisterClient(id)

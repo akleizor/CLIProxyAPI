@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -29,21 +30,62 @@ func testHostCallbackID(t *testing.T, client *dynamicLibraryClient) uintptr {
 
 func buildReloadTestPlugin(t *testing.T, version int, outPath string) {
 	t.Helper()
+	data, errRead := os.ReadFile(reloadPluginBuild(t, version))
+	if errRead != nil {
+		t.Fatalf("read cached plugin (v%d): %v", version, errRead)
+	}
+	if errWrite := os.WriteFile(outPath, data, 0o755); errWrite != nil {
+		t.Fatalf("write plugin (v%d): %v", version, errWrite)
+	}
+}
+
+// Plugin builds are shared across tests: every c-shared build links a full Go
+// runtime, so one build per version serves all tests that need it.
+var (
+	reloadPluginMu    sync.Mutex
+	reloadPluginDir   string
+	reloadPluginPaths = map[int]string{}
+)
+
+func reloadPluginBuild(t *testing.T, version int) string {
+	t.Helper()
+	reloadPluginMu.Lock()
+	defer reloadPluginMu.Unlock()
+	if cached, ok := reloadPluginPaths[version]; ok {
+		return cached
+	}
 	goTool, errGo := exec.LookPath("go")
 	if errGo != nil {
 		t.Skipf("go toolchain unavailable: %v", errGo)
 	}
-	sourceDir := filepath.Join("testdata", "loader_unix_reload_plugin")
-	cmd := exec.Command(goTool, "build", "-buildmode=c-shared", "-o", outPath, ".")
-	cmd.Dir = sourceDir
-	cflags := "-DPLUGIN_VERSION=1"
-	if version >= 1 {
-		cflags = fmt.Sprintf("-DPLUGIN_VERSION=%d", version)
+	if reloadPluginDir == "" {
+		dir, errDir := os.MkdirTemp("", "cliproxy-plugin-test")
+		if errDir != nil {
+			t.Fatalf("create plugin build dir: %v", errDir)
+		}
+		reloadPluginDir = dir
 	}
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=1", "CGO_CFLAGS="+cflags)
+	ext := ".so"
+	if runtime.GOOS == "darwin" {
+		ext = ".dylib"
+	}
+	outPath := filepath.Join(reloadPluginDir, fmt.Sprintf("plugin-v%d%s", version, ext))
+	cmd := exec.Command(goTool, "build", "-buildmode=c-shared", "-o", outPath, ".")
+	cmd.Dir = filepath.Join("testdata", "loader_unix_reload_plugin")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=1", fmt.Sprintf("CGO_CFLAGS=-DPLUGIN_VERSION=%d", version))
 	if output, errBuild := cmd.CombinedOutput(); errBuild != nil {
 		t.Fatalf("build test plugin (v%d): %v\n%s", version, errBuild, output)
 	}
+	reloadPluginPaths[version] = outPath
+	return outPath
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if reloadPluginDir != "" {
+		_ = os.RemoveAll(reloadPluginDir)
+	}
+	os.Exit(code)
 }
 
 func TestUnixPluginReloadAfterShutdownUsesReplacedFile(t *testing.T) {
