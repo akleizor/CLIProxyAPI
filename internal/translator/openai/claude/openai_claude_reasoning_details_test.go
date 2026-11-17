@@ -141,7 +141,9 @@ func TestReasoningDetails_ReplayValidation(t *testing.T) {
 }
 
 func TestReasoningDetails_FinalAnswerStaysLastIssue646(t *testing.T) {
-	events := runStream(t, streamReq, `{"choices":[{"delta":{"content":"PONG","reasoning_details":[{"type":"content","text":"PONG","signature":"content-signature"}]},"finish_reason":"stop"}]}`)
+	events := runStream(t, streamReq,
+		`{"choices":[{"delta":{"content":"PONG"}}]}`,
+		`{"choices":[{"delta":{"reasoning_details":[{"type":"content","text":"PONG","signature":"content-signature"}]},"finish_reason":"stop"}]}`)
 	assertSequentialContentBlocks(t, events)
 	var lastBlockType string
 	for _, event := range events {

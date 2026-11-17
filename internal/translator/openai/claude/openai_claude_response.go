@@ -34,6 +34,8 @@ type ConvertOpenAIResponseToAnthropicParams struct {
 	SawToolCall bool
 	// Content accumulator for streaming
 	ContentAccumulator strings.Builder
+	// Hold the final text chunk until any trailing signature has arrived.
+	PendingText string
 	// Tool calls accumulator for streaming
 	ToolCallsAccumulator map[int]*ToolCallAccumulator
 	// Preserve opaque upstream entries in arrival order for assistant replay.
@@ -406,7 +408,7 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 	// Content chunks with finish_reason and preliminary usage must not emit message_delta early,
 	// because authoritative token counts (such as cached_tokens) can arrive in the trailing usage-only chunk.
 	isTrailingUsageChunk := hasUsage && !root.Get("choices.0").Exists() &&
-		(param.FinishReason != "" || param.SawToolCall || param.TextContentBlockStarted || param.ThinkingContentBlockStarted || param.ContentAccumulator.Len() > 0 || len(param.InterleavedContentChunks) > 0)
+		(param.FinishReason != "" || param.SawToolCall || param.TextContentBlockStarted || param.ThinkingContentBlockStarted || param.ContentAccumulator.Len() > 0 || param.PendingText != "" || len(param.InterleavedContentChunks) > 0)
 
 	if !param.MessageDeltaSent && isTrailingUsageChunk {
 		finalizeOpenAIAnthropicContentBlocks(param, &results)
@@ -572,6 +574,7 @@ func emitStreamingThinkingDelta(param *ConvertOpenAIResponseToAnthropicParams, r
 	if reasoningText == "" {
 		return
 	}
+	flushPendingText(param, results)
 	// Anthropic rejects whitespace-only thinking blocks, so whitespace may only extend an open one.
 	if param.OpenToolCallIndex != -1 {
 		if n := len(param.InterleavedContentChunks); n > 0 && param.InterleavedContentChunks[n-1].Type == "thinking" {
@@ -606,6 +609,20 @@ func emitStreamingThinkingDelta(param *ConvertOpenAIResponseToAnthropicParams, r
 }
 
 func emitStreamingTextDelta(param *ConvertOpenAIResponseToAnthropicParams, text string, results *[][]byte) {
+	if text == "" {
+		return
+	}
+	flushPendingText(param, results)
+	param.PendingText = strings.Clone(text)
+}
+
+func flushPendingText(param *ConvertOpenAIResponseToAnthropicParams, results *[][]byte) {
+	text := param.PendingText
+	param.PendingText = ""
+	emitStreamingTextDeltaNow(param, text, results)
+}
+
+func emitStreamingTextDeltaNow(param *ConvertOpenAIResponseToAnthropicParams, text string, results *[][]byte) {
 	if text == "" {
 		return
 	}
@@ -792,6 +809,7 @@ func stopTextContentBlock(param *ConvertOpenAIResponseToAnthropicParams, results
 }
 
 func emitToolUseStart(param *ConvertOpenAIResponseToAnthropicParams, openAIToolIndex int, accumulator *ToolCallAccumulator, results *[][]byte) {
+	flushPendingText(param, results)
 	stopThinkingContentBlock(param, results)
 	stopTextContentBlock(param, results)
 
@@ -903,6 +921,13 @@ func finalizeOpenAIAnthropicContentBlocks(param *ConvertOpenAIResponseToAnthropi
 	if param == nil {
 		return
 	}
+	var finalText string
+	if len(param.ReasoningDetails) > 0 && param.OpenToolCallIndex == -1 {
+		finalText = param.PendingText
+		param.PendingText = ""
+	} else {
+		flushPendingText(param, results)
+	}
 	stopThinkingContentBlock(param, results)
 	stopTextContentBlock(param, results)
 
@@ -931,6 +956,8 @@ func finalizeOpenAIAnthropicContentBlocks(param *ConvertOpenAIResponseToAnthropi
 			param.ReasoningDetails = nil
 		}
 		emitBufferedInterleavedContent(param, results)
+		emitStreamingTextDeltaNow(param, finalText, results)
+		stopTextContentBlock(param, results)
 	}
 }
 

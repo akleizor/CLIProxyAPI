@@ -1475,8 +1475,8 @@ const streamFlagTestChunk = `data: {"id":"chatcmpl_1","model":"test-model","crea
 func TestConvertOpenAIResponseToClaude_StreamFlagResolvedOncePerStream(t *testing.T) {
 	var param any
 	first := ConvertOpenAIResponseToClaude(context.Background(), "test-model", []byte(`{"model":"m","stream":true}`), nil, []byte(streamFlagTestChunk), &param)
-	if !bytes.Contains(bytes.Join(first, nil), []byte("content_block_delta")) {
-		t.Fatalf("expected streaming events on first chunk, got %q", bytes.Join(first, nil))
+	if !bytes.Contains(bytes.Join(first, nil), []byte("message_start")) {
+		t.Fatalf("expected streaming message_start before the buffered text, got %q", bytes.Join(first, nil))
 	}
 
 	// An empty original request on subsequent chunks would parse as non-streaming if re-read.
@@ -1489,8 +1489,8 @@ func TestConvertOpenAIResponseToClaude_StreamFlagResolvedOncePerStream(t *testin
 func TestConvertOpenAIResponseToClaude_ToolNameMapResolvedOnceWhenNoTools(t *testing.T) {
 	var param any
 	first := ConvertOpenAIResponseToClaude(context.Background(), "test-model", []byte(`{"model":"m","stream":true}`), nil, []byte(streamFlagTestChunk), &param)
-	if !bytes.Contains(bytes.Join(first, nil), []byte("content_block_delta")) {
-		t.Fatalf("expected streaming events on first chunk, got %q", bytes.Join(first, nil))
+	if !bytes.Contains(bytes.Join(first, nil), []byte("message_start")) {
+		t.Fatalf("expected streaming message_start before the buffered text, got %q", bytes.Join(first, nil))
 	}
 
 	// Even when the first chunk resolved ToolNameMap to nil (no tools in request),
