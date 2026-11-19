@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
@@ -12,10 +11,6 @@ import (
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
-
-// refreshLead refreshes a sign-in this close to expiry, so a caller that reads
-// the token right after gets one that outlives its request.
-const refreshLead = 10 * time.Minute
 
 // refreshExecutor is the provider's own executor, whose Refresh holds its OAuth
 // client; nil for a provider with nothing to refresh (API keys).
@@ -41,10 +36,9 @@ func refreshExecutor(cfg *config.Config, provider string) cliproxyauth.ProviderE
 	return nil
 }
 
-// DoRefresh refreshes every OAuth sign-in in the auth dir that expires soon,
-// through its provider's own executor, saves it and exits. It lets a tool that
-// only reads tokens (ccmorph's quota reader) keep sign-ins alive with no proxy
-// running.
+// DoRefresh refreshes every OAuth sign-in in the auth dir that the proxy's own
+// auto-refresh would refresh now, saves it and exits. It lets a tool that only
+// reads tokens (ccmorph's quota reader) keep sign-ins alive with no proxy running.
 func DoRefresh(cfg *config.Config) int {
 	dir, err := util.ResolveAuthDir(cfg.AuthDir)
 	if err != nil {
@@ -59,33 +53,25 @@ func DoRefresh(cfg *config.Config) int {
 		fmt.Println(err)
 		return 1
 	}
-	code := 0
+	manager := cliproxyauth.NewManager(store, nil, nil)
+	manager.SetConfig(cfg)
 	for _, a := range auths {
-		exec := refreshExecutor(cfg, a.Provider)
-		if exec == nil || a.Disabled || !expiresSoon(a, time.Now()) {
+		if exec := refreshExecutor(cfg, a.Provider); exec != nil {
+			manager.RegisterExecutor(exec)
+		}
+	}
+	if err := manager.Load(ctx); err != nil {
+		fmt.Println(err)
+		return 1
+	}
+	code := 0
+	for _, r := range manager.RefreshDue(ctx) {
+		if r.Success {
+			fmt.Printf("%s: refreshed\n", r.ID)
 			continue
 		}
-		updated, errRefresh := exec.Refresh(ctx, a)
-		if errRefresh != nil {
-			fmt.Printf("%s: refresh failed: %v\n", a.FileName, errRefresh)
-			code = 1
-			continue
-		}
-		if _, errSave := store.Save(ctx, updated); errSave != nil {
-			fmt.Printf("%s: save failed: %v\n", a.FileName, errSave)
-			code = 1
-			continue
-		}
-		fmt.Printf("%s: refreshed\n", a.FileName)
+		fmt.Printf("%s: refresh failed: %s\n", r.ID, r.Error)
+		code = 1
 	}
 	return code
-}
-
-// expiresSoon is whether the sign-in's access token expires within the lead.
-// A sign-in with no recorded expiry is left alone: refreshing it on every call
-// would rotate its token for nothing.
-func expiresSoon(a *cliproxyauth.Auth, now time.Time) bool {
-	s, _ := a.Metadata["expired"].(string)
-	t, err := time.Parse(time.RFC3339, s)
-	return err == nil && now.Add(refreshLead).After(t)
 }
