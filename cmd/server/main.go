@@ -126,6 +126,7 @@ func run() (exitStatus int) {
 	var oauthCallbackPort int
 	var loginProxyURL string
 	var antigravityLogin bool
+	var refreshAuths bool
 	var antigravityRefresh bool
 	var kimiLogin bool
 	var kimiAILogin bool
@@ -158,7 +159,8 @@ func run() (exitStatus int) {
 	flag.IntVar(&oauthCallbackPort, "oauth-callback-port", 0, "Override OAuth callback port (defaults to provider-specific port)")
 	flag.StringVar(&loginProxyURL, "login-proxy", "", "Proxy URL used for the OAuth login flow and saved as the new credential's proxy_url (http, https, socks5, socks5h)")
 	flag.BoolVar(&antigravityLogin, "antigravity-login", false, "Login to Antigravity using OAuth")
-	flag.BoolVar(&antigravityRefresh, "antigravity-refresh", false, "Refresh Antigravity sign-ins that expire soon, save them and exit")
+	flag.BoolVar(&refreshAuths, "refresh", false, "Refresh every OAuth sign-in that expires soon, save it and exit")
+	flag.BoolVar(&antigravityRefresh, "antigravity-refresh", false, "Same as -refresh (kept for ccmorph 0.5.18)")
 	flag.BoolVar(&kimiLogin, "kimi-login", false, "Login to Kimi (.com) using OAuth")
 	flag.BoolVar(&kimiAILogin, "kimi-ai-login", false, "Login to Kimi.ai using OAuth")
 	flag.BoolVar(&xaiLogin, "xai-login", false, "Login to xAI using OAuth")
@@ -677,7 +679,7 @@ func run() (exitStatus int) {
 		ProxyURL:     loginProxyURL,
 	}
 
-	commandMode := vertexImport != "" || siwcBind != "" || antigravityLogin || antigravityRefresh || codexLogin || codexDeviceLogin || claudeLogin || kimiLogin || kimiAILogin || xaiLogin || devinLogin || metaLogin
+	commandMode := vertexImport != "" || siwcBind != "" || antigravityLogin || antigravityRefresh || refreshAuths || codexLogin || codexDeviceLogin || claudeLogin || kimiLogin || kimiAILogin || xaiLogin || devinLogin || metaLogin
 	cloudConfigMissing := isCloudDeploy && !configFileExists
 	homeMode := configLoadedFromHome || (cfg != nil && cfg.Home.Enabled)
 	exampleAPIKeySafeMode := shouldEnableExampleAPIKeySafeMode(cfg, commandMode, tuiMode, standalone, cloudConfigMissing, homeMode)
@@ -735,8 +737,8 @@ func run() (exitStatus int) {
 	} else if siwcBind != "" {
 		// Handle Sign in with ChatGPT (SIWC) credential binding
 		cmd.DoSIWCBind(cfg, siwcBind, options)
-	} else if antigravityRefresh {
-		return cmd.DoAntigravityRefresh(cfg)
+	} else if refreshAuths || antigravityRefresh {
+		return cmd.DoRefresh(cfg)
 	} else if antigravityLogin {
 		// Handle Antigravity login
 		cmd.DoAntigravityLogin(cfg, options)
